@@ -1,0 +1,66 @@
+[project]
+name = "synthetic-data-pipeline"
+version = "0.1.0"
+description = "CAD (STEP) to instance-segmentation training data via Isaac Sim/Replicator, plus YOLO26-seg training."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pillow",
+    "opencv-python",
+    "ultralytics",
+    "torch",
+    "torchvision",
+]
+
+# This repo is a set of top-level scripts + a utils/ package imported via
+# cwd, not a library meant to be built/distributed - tell uv not to treat it
+# as an installable package (skips needing a [build-system] / src layout).
+[tool.uv]
+package = false
+
+# torch/torchvision default to CPU-only wheels on PyPI, which silently
+# trains on CPU instead of the GPU. Route just those two packages to the
+# CUDA build instead - `explicit = true` means this index is ONLY used for
+# packages that opt in via [tool.uv.sources] below, not as a general
+# fallback for everything else.
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# ---- Pipeline settings (read by config.py) ----
+# Tool-specific config lives under [tool.*], same as [tool.uv] above.
+
+[tool.synth-pipeline.isaac]
+# Single-quoted (TOML "literal string") so backslashes are taken verbatim -
+# double-quoted strings would otherwise treat "\i" etc. as escape sequences.
+root = 'C:\isaac\isaac-sim-standalone-6.0.1-windows-x86_64'
+
+[tool.synth-pipeline.rendering]
+num_frames = 2000
+resolution = [640, 640]
+
+[tool.synth-pipeline.randomization]
+# Camera distance chosen relative to typical small-part size (~5-40mm) - too
+# close (only ~1-3x the object size) makes every mask/box fill the frame,
+# which is unrealistic for real photos taken from a normal working distance.
+camera_position_min = [-150, -150, 80]
+camera_position_max = [150, 150, 350]
+
+point_light_position_min = [-150, -150, 50]
+point_light_position_max = [150, 150, 300]
+point_light_intensity_min = 50000
+point_light_intensity_max = 500000
+
+dome_light_intensity_min = 300
+dome_light_intensity_max = 2000
+
+part_position_min = [-25, -25, 0]
+part_position_max = [25, 25, 0]
+
+plane_scale = 1000
+val_split = 0.15
