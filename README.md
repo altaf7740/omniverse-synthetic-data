@@ -43,7 +43,13 @@ fixed `seed` makes runs reproducible.
 Parts are loaded with their pivot moved to their geometric center. CAD
 exports often put geometry far from the file's origin (the example nut is
 ~78 mm off it), which would otherwise make parts land out of frame or rotate
-into the ground.
+into the ground. Instanced sub-shapes from the CAD converter are also
+de-instanced on load; rendered as shared prototypes they picked up corrupt
+transforms, and whole frames lost their labels.
+
+Parts that are "absent" from a frame are parked far out of view rather than
+hidden. Toggling visibility made the renderer leave a part unlabelled in
+the masks for a few frames after it reappeared.
 
 If any stage fails, the pipeline stops there with a nonzero exit code, so
 `make` and CI can see the failure. Stage 1 also fails if even one class
@@ -286,9 +292,9 @@ modules with those names.
   via `--textures-dir` are the better source when you have them.
 - **Rendering is ~1.2 s per frame** (mostly physics settling), so a
   2000-frame dataset takes about 40 minutes.
-- **Noisy but harmless log warnings.** Stage 2 logs Replicator
-  `Illegal cycle connection ... WriterSyncGate` warnings on every frame, and
-  occasional `rtx.scenedb ... exceed the recommended extents limit`
-  warnings. Neither affects the output; errors still stop the run.
+- **Stage 2's console shows errors only**, plus a progress bar with ETA.
+  Warnings (e.g. Replicator's harmless per-frame `Illegal cycle connection
+  ... WriterSyncGate`) still go to Kit's log file, whose path is printed at
+  startup.
 - **Weight downloads from GitHub can be flaky.** Ultralytics retries on its
   own; once downloaded, weights are reused from `~/.cache/synth-pipeline/`.

@@ -24,6 +24,7 @@ Run with Isaac Sim's bundled Python, from the repo root:
 import argparse
 import json
 import shutil
+import sys
 import traceback
 from pathlib import Path
 
@@ -74,12 +75,17 @@ args = parse_args()
 
 from isaacsim import SimulationApp
 
-simulation_app = SimulationApp({"headless": True})
+# Console shows errors only, so the progress bar stays readable: Replicator
+# logs a harmless "Illegal cycle connection ... WriterSyncGate" warning every
+# frame. Warnings still go to Kit's log file. (Must be a launch argument -
+# changing the setting after boot has no effect.)
+simulation_app = SimulationApp({"headless": True, "extra_args": ["--/log/outputStreamLevel=Error"]})
 
 import numpy as np
 import omni.physx
 import omni.replicator.core as rep
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade
+from tqdm import tqdm  # bundled with Isaac Sim's Python
 
 # The imperative rep.functional API is used throughout, not the trigger-graph
 # API: it builds no OmniGraph, so it avoids a Replicator graph-builder bug
@@ -167,6 +173,14 @@ class Scene:
         root = F.create.xform(semantics={"class": class_name}, name=f"Part_{index}_{class_name}")
         pivot = F.create.xform(parent=root, name="Pivot")
         geometry = F.create.reference(usd_path, parent=pivot, name="Geometry")
+        # The CAD converter instances repeated sub-shapes. Rendered from shared
+        # prototypes, those picked up corrupt (inf) transforms once the part
+        # was moved, and whole frames lost their labels - so de-instance them.
+        instanced = [p for p in Usd.PrimRange(geometry) if p.IsInstance()]
+        while instanced:
+            for prim in instanced:
+                prim.SetInstanceable(False)
+            instanced = [p for p in Usd.PrimRange(geometry) if p.IsInstance()]
         center = _world_range(geometry).GetMidpoint()
         F.modify.pose(pivot, position_value=tuple(-v for v in center), write_to_usd=True)
         return root
@@ -214,9 +228,12 @@ class Scene:
             chosen = [pool[i] for i in rng.integers(0, len(pool), len(bodies))]
             F.modify.material(bodies, chosen, strength=[strength] * len(bodies))
 
+        # "Absent" bodies are parked far out of view by drop_and_settle, not
+        # hidden: toggling visibility made the renderer drop a part's class
+        # label for a few frames after it was shown again, so it came out
+        # unlabelled in the masks.
         part_on = rng.random(len(self.parts)) < config.PART_VISIBLE_PROBABILITY
         dist_on = rng.random(len(self.distractors)) < config.DISTRACTOR_VISIBLE_PROBABILITY
-        F.modify.visibility(self.parts + self.distractors, [bool(v) for v in np.concatenate([part_on, dist_on])])
         return part_on, dist_on
 
     def drop_and_settle(self, rng, part_on, dist_on) -> int:
@@ -257,22 +274,18 @@ class Scene:
 
         # Read the settled poses from PhysX and apply them ourselves: PhysX's
         # own write-back to USD/Fabric only happens on some frames, which left
-        # bodies rendered floating at their drop height.
-        moved = [b for b, on in zip(bodies, visible) if on]
+        # bodies rendered floating at their drop height. Parked bodies too, so
+        # none is left rendering at last frame's spot.
         final_pos, final_rot = [], []
-        for body in moved:
+        for body in bodies:
             t = self.physx.get_rigidbody_transformation(str(body.GetPath()))
             x, y, z, w = t["rotation"]  # PhysX quaternions are imaginary-first
             final_pos.append(tuple(float(v) for v in t["position"]))
             final_rot.append(Gf.Rotation(Gf.Quatd(w, x, y, z)))
-        if moved:
-            for to_usd in (True, False):  # USD, then Fabric (what the renderer reads)
-                F.modify.pose(moved, position_value=final_pos, rotation_value=final_rot, write_to_usd=to_usd)
+        for to_usd in (True, False):  # USD, then Fabric (what the renderer reads)
+            F.modify.pose(bodies, position_value=final_pos, rotation_value=final_rot, write_to_usd=to_usd)
 
-        part_z = {str(b.GetPath()): p[2] for b, p in zip(moved, final_pos)}
-        return sum(
-            1 for body, r, on in zip(self.parts, self.part_radii, part_on) if on and part_z[str(body.GetPath())] < -r
-        )
+        return sum(1 for p, r, on in zip(final_pos, self.part_radii, part_on) if on and p[2] < -r)
 
     def place_camera(self, rng) -> None:
         dist = rng.uniform(*config.CAMERA_DISTANCE)
@@ -304,14 +317,16 @@ def render(manifest: dict, dataset_dir: Path, ground_textures: list, env_texture
     writer.attach(render_product)
 
     fell_through = 0
-    for i in range(num_frames):
-        part_on, dist_on = scene.randomize_appearance(rng)
-        fell_through += scene.drop_and_settle(rng, part_on, dist_on)
-        scene.place_camera(rng)
-        # delta_time=0: capture without advancing the timeline.
-        rep.orchestrator.step(rt_subframes=config.RT_SUBFRAMES, delta_time=0.0)
-        if (i + 1) % 50 == 0 or i + 1 == num_frames:
-            print(f"  frame {i + 1}/{num_frames}", flush=True)
+    with tqdm(total=num_frames, desc="Rendering", unit="frame", file=sys.stdout, dynamic_ncols=True) as bar:
+        for _ in range(num_frames):
+            part_on, dist_on = scene.randomize_appearance(rng)
+            fell_through += scene.drop_and_settle(rng, part_on, dist_on)
+            scene.place_camera(rng)
+            # delta_time=0: capture without advancing the timeline.
+            rep.orchestrator.step(rt_subframes=config.RT_SUBFRAMES, delta_time=0.0)
+            bar.update()
+            if fell_through:
+                bar.set_postfix(fell_through=fell_through)
 
     rep.orchestrator.wait_until_complete()
     writer.detach()
