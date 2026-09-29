@@ -43,24 +43,49 @@ root = 'C:\isaac\isaac-sim-standalone-6.0.1-windows-x86_64'
 [tool.synth-pipeline.rendering]
 num_frames = 2000
 resolution = [640, 640]
+seed = 42  # same seed + same inputs -> same dataset
+rt_subframes = 4  # render passes per captured frame, so swapped textures/materials fully load
 
-[tool.synth-pipeline.randomization]
-# Camera distance chosen relative to typical small-part size (~5-40mm) - too
-# close (only ~1-3x the object size) makes every mask/box fill the frame,
-# which is unrealistic for real photos taken from a normal working distance.
-camera_position_min = [-150, -150, 80]
-camera_position_max = [150, 150, 350]
+# Parts and clutter are dropped onto the surface and settle under physics each
+# frame, so they rest in natural poses instead of being placed at arbitrary
+# (often half-buried) orientations.
+[tool.synth-pipeline.physics]
+gravity = 9810.0  # stage units / s^2; 9810 = 9.81 m/s^2 in mm, the example parts' CAD units
+settle_seconds = 1.0
+steps_per_second = 240
 
-point_light_position_min = [-150, -150, 50]
-point_light_position_max = [150, 150, 300]
-point_light_intensity_min = 50000
-point_light_intensity_max = 500000
-
-dome_light_intensity_min = 300
-dome_light_intensity_max = 2000
-
-part_position_min = [-25, -25, 0]
-part_position_max = [25, 25, 0]
-
-plane_scale = 1000
+[tool.synth-pipeline.dataset]
 val_split = 0.15
+
+# Ranges are [min, max]. Lengths are in the parts' own CAD units (mm for the
+# example fasteners).
+[tool.synth-pipeline.randomization]
+# Camera orbits the parts. Distance is tuned for small parts (~5-40 mm): close
+# enough to show detail, far enough that parts don't fill the frame. Elevation
+# is the angle above the ground: low angles see past the ground to the
+# backdrop; it stays below 90 because looking straight down makes the
+# camera's look-at orientation degenerate.
+camera_distance = [50, 200]
+camera_elevation_deg = [15, 85]
+camera_look_at_jitter = 20  # off-center framing, so parts aren't always mid-frame
+
+part_spread = 30  # parts are dropped within +/- this distance of the center (x and y)
+part_visible_probability = 0.85  # each part independently; gives single- and multi-part frames
+
+# Unlabelled clutter (cubes, spheres, cylinders, cones, tori) so the model
+# learns to ignore things that aren't parts.
+# Kept at or below part size and sparse - clutter should challenge the model,
+# not bury the parts.
+distractors_per_shape = 2
+distractor_size = [3, 20]
+distractor_spread = 80
+distractor_visible_probability = 0.4
+
+ground_size = 1000
+# Size of one texture repeat on the ground. Kept small so close-ups still
+# show crisp texture detail instead of a few magnified texels.
+ground_texture_tile = [20, 100]
+
+dome_light_intensity = [300, 2000]
+point_light_position = [[-150, -150, 50], [150, 150, 300]]
+point_light_intensity = [50000, 500000]

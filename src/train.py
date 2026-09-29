@@ -8,9 +8,16 @@ Run with a normal Python, from the repo root:
 """
 
 import argparse
+import os
 from pathlib import Path
 
 from ultralytics import YOLO
+
+# Ultralytics downloads pretrained weights into the working directory (plus a
+# separate yolo26n.pt it uses only to self-test mixed precision). Training
+# runs from this cache instead, so those are downloaded once and never land
+# in the repo.
+WEIGHTS_CACHE = Path.home() / ".cache" / "synth-pipeline"
 
 
 def parse_args():
@@ -31,6 +38,8 @@ def parse_args():
 # model.train() itself and crashes with a "freeze_support()" RuntimeError.
 if __name__ == "__main__":
     args = parse_args()
+    WEIGHTS_CACHE.mkdir(parents=True, exist_ok=True)
+    os.chdir(WEIGHTS_CACHE)  # safe: every path passed to Ultralytics below is absolute
     model = YOLO("yolo26n-seg.pt")  # COCO-pretrained nano model, segment task
 
     model.train(

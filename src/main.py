@@ -30,21 +30,33 @@ from synth_pipeline import config
 
 HERE = Path(__file__).resolve().parent
 
-# (name, script, interpreter, needs_input_dir)
+# (name, script, interpreter)
 STAGES = [
-    ("convert", HERE / "convert_assets.py", "isaac", True),
-    ("generate", HERE / "generate_dataset.py", "isaac", False),
-    ("dataset", HERE / "build_yolo_dataset.py", "system", False),
-    ("train", HERE / "train.py", "system", False),
+    ("convert", HERE / "convert_assets.py", "isaac"),
+    ("generate", HERE / "generate_dataset.py", "isaac"),
+    ("dataset", HERE / "build_yolo_dataset.py", "system"),
+    ("train", HERE / "train.py", "system"),
 ]
 STAGE_NAMES = [s[0] for s in STAGES]
 
 
-def run_stage(name: str, script: Path, interpreter: str, needs_input: bool, input_dir: Path, output_dir: Path) -> None:
+def stage_args(name: str, args) -> list:
+    """Arguments beyond --output-dir that a given stage accepts."""
+    if name == "convert":
+        return ["--input-dir", str(args.input_dir)]
+    if name == "generate":
+        extra = []
+        if args.num_frames is not None:
+            extra += ["--num-frames", str(args.num_frames)]
+        if args.textures_dir is not None:
+            extra += ["--textures-dir", str(args.textures_dir)]
+        return extra
+    return []
+
+
+def run_stage(name: str, script: Path, interpreter: str, args) -> None:
     py = str(config.ISAAC_PYTHON) if interpreter == "isaac" else sys.executable
-    cmd = [py, str(script), "--output-dir", str(output_dir)]
-    if needs_input:
-        cmd += ["--input-dir", str(input_dir)]
+    cmd = [py, str(script), "--output-dir", str(args.output_dir)] + stage_args(name, args)
 
     print(f"\n=== stage '{name}': {' '.join(cmd)} ===\n")
     # No cwd= override here - input_dir/output_dir are already resolved to
@@ -61,6 +73,8 @@ def main():
     parser.add_argument("--output-dir", required=True, type=Path, help="Where generated USDs/dataset/runs go.")
     parser.add_argument("--stage", choices=STAGE_NAMES, help="Run only this stage.")
     parser.add_argument("--from", dest="from_stage", choices=STAGE_NAMES, help="Run this stage and all after it.")
+    parser.add_argument("--num-frames", type=int, help="Frames to render (default: pyproject.toml's num_frames).")
+    parser.add_argument("--textures-dir", type=Path, help="Folder of photos to mix into ground/backdrop textures.")
     args = parser.parse_args()
 
     # Resolve to absolute paths immediately - user-typed relative paths are
@@ -68,6 +82,8 @@ def main():
     # a downstream subprocess happens to run in.
     args.input_dir = args.input_dir.resolve()
     args.output_dir = args.output_dir.resolve()
+    if args.textures_dir is not None:
+        args.textures_dir = args.textures_dir.resolve()
 
     if args.stage:
         stages_to_run = [s for s in STAGES if s[0] == args.stage]
@@ -79,8 +95,8 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    for name, script, interpreter, needs_input in stages_to_run:
-        run_stage(name, script, interpreter, needs_input, args.input_dir, args.output_dir)
+    for name, script, interpreter in stages_to_run:
+        run_stage(name, script, interpreter, args)
 
     print("\nPipeline complete.")
 
