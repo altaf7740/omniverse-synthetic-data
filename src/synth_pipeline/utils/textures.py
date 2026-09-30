@@ -76,11 +76,11 @@ def _grid(size: int):
 def _wood(rng, n):
     x, y = _grid(n)
     warp = _fractal(rng, n, base_cells=2, octaves=3)
-    rings = int(rng.integers(6, 18))
-    grain = 0.5 + 0.5 * np.sin(2 * np.pi * (rings * x + 2.5 * warp))
-    field = 0.75 * grain**2 + 0.25 * _noise(rng, n, 64, 4)
-    dark = _jitter(rng, (0.28, 0.16, 0.08))
-    light = _jitter(rng, (0.62, 0.42, 0.24))
+    rings = int(rng.integers(16, 48))
+    grain = 0.5 + 0.5 * np.sin(2 * np.pi * (rings * x + 0.8 * warp))
+    field = 0.4 * grain**3 + 0.35 * _noise(rng, n, 128, 4) + 0.25 * _fractal(rng, n, 2, 3)
+    dark = _jitter(rng, (0.33, 0.2, 0.1))
+    light = _jitter(rng, (0.62, 0.45, 0.28))
     return _lerp(field, dark, light)
 
 
@@ -98,26 +98,33 @@ def _concrete(rng, n):
     return _lerp(np.clip(field - pits, 0, 1), _jitter(rng, (base - 0.2,) * 3, 0.04), _jitter(rng, (base + 0.1,) * 3, 0.04))
 
 
+def _muted(rng, sat=(0.0, 0.35), val=(0.15, 0.85)) -> np.ndarray:
+    """A random color at low saturation - what real benches, mats and floors look like."""
+    h, s, v = rng.random(), rng.uniform(*sat), rng.uniform(*val)
+    i, f = int(h * 6) % 6, h * 6 - int(h * 6)
+    p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    return np.array([(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i], np.float32)
+
+
 def _fabric(rng, n):
     x, y = _grid(n)
     f = int(rng.choice([32, 64, 128]))
     weave = 0.5 + 0.25 * (np.sin(2 * np.pi * f * x) + np.sin(2 * np.pi * f * y))
     field = 0.7 * weave + 0.3 * _noise(rng, n, 32)
-    color = rng.uniform(0.1, 0.9, 3)
-    return _lerp(field, color * 0.55, color)
+    color = _muted(rng)
+    return _lerp(field, color * 0.7, color)
 
 
 def _tiles(rng, n):
     x, y = _grid(n)
-    count = int(rng.choice([2, 4, 8]))
+    count = int(rng.choice([2, 4]))
     fx, fy = (x * count) % 1.0, (y * count) % 1.0
-    grout_w = rng.uniform(0.02, 0.06)
+    grout_w = rng.uniform(0.01, 0.04)
     grout = (fx < grout_w) | (fy < grout_w)
-    checker = ((np.floor(x * count) + np.floor(y * count)) % 2).astype(np.float32)
-    a, b = rng.uniform(0.2, 0.95, 3), rng.uniform(0.2, 0.95, 3)
-    img = _lerp(checker * rng.uniform(0.0, 1.0), a, b)
-    img *= (0.9 + 0.1 * _noise(rng, n, 32))[..., None]
-    img[grout] = rng.uniform(0.15, 0.6)
+    color = _muted(rng, sat=(0.0, 0.2), val=(0.4, 0.9))
+    per_tile = _noise(rng, n, count) * 0.12  # slight tile-to-tile shade difference, not a checkerboard
+    img = color * (0.88 + per_tile[..., None] + 0.08 * _noise(rng, n, 64)[..., None])
+    img[grout] = color * rng.uniform(0.4, 0.7)
     return img
 
 
@@ -130,11 +137,12 @@ def _cardboard(rng, n):
 
 
 def _speckle(rng, n):
-    base = rng.uniform(0.3, 0.9, 3)
+    """Speckled laminate / epoxy floor."""
+    base = _muted(rng, val=(0.3, 0.85))
     img = _lerp(_noise(rng, n, 16), base * 0.9, base)
     for _ in range(3):
-        dots = _noise(rng, n, 128) > rng.uniform(0.78, 0.9)
-        img[dots] = rng.uniform(0.0, 1.0, 3)
+        dots = _noise(rng, n, 128) > rng.uniform(0.8, 0.9)
+        img[dots] = base * rng.uniform(0.4, 1.3)
     return img
 
 
@@ -148,11 +156,31 @@ def _rubber_mat(rng, n):
     return _lerp(field, (base,) * 3, (base + 0.12,) * 3)
 
 
+def _esd_mat(rng, n):
+    """Anti-static work mat: matte green, blue or grey with a faint mottle."""
+    color = _jitter(rng, [(0.18, 0.38, 0.28), (0.2, 0.3, 0.45), (0.35, 0.36, 0.38)][int(rng.integers(3))], 0.05)
+    return _lerp(0.6 * _fractal(rng, n, 8, 4) + 0.4 * _noise(rng, n, 128), color * 0.85, color * 1.1)
+
+
+def _paper(rng, n):
+    """Paper, whiteboard or light laminate."""
+    color = _muted(rng, sat=(0.0, 0.08), val=(0.78, 0.97))
+    fibers = 0.5 * _noise(rng, n, 128, 32) + 0.5 * _noise(rng, n, 32, 128)
+    return _lerp(0.7 * fibers + 0.3 * _fractal(rng, n, 4, 3), color * 0.93, color)
+
+
 def _plain(rng, n):
+    return _lerp(_fractal(rng, n, 4, 4), (c := _muted(rng)) * 0.85, c)
+
+
+def _wild(rng, n):
+    """Loud, saturated color. A small share keeps the model from keying on "surfaces are muted"."""
     color = rng.uniform(0.05, 0.95, 3)
     return _lerp(_fractal(rng, n, 4, 4), color * 0.85, color)
 
 
+# One entry per generator; each makes `variants` textures. Realistic surfaces
+# dominate; _wild is 1 in 12.
 _GROUND_GENERATORS = {
     "wood": _wood,
     "brushed_metal": _brushed_metal,
@@ -162,7 +190,10 @@ _GROUND_GENERATORS = {
     "cardboard": _cardboard,
     "speckle": _speckle,
     "rubber_mat": _rubber_mat,
+    "esd_mat": _esd_mat,
+    "paper": _paper,
     "plain": _plain,
+    "wild": _wild,
 }
 
 
@@ -174,8 +205,10 @@ def _environment(rng, width: int, height: int) -> np.ndarray:
     v = np.linspace(0.0, 1.0, height, dtype=np.float32)[:, None]  # 0 = top (zenith)
     if rng.random() < 0.5:  # neutral studio
         top, horizon, bottom = (rng.uniform(0.6, 1.0),) * 3, (rng.uniform(0.4, 0.8),) * 3, (rng.uniform(0.1, 0.4),) * 3
-    else:  # tinted sky / room
-        top, horizon, bottom = rng.uniform(0.3, 1.0, 3), rng.uniform(0.5, 1.0, 3), rng.uniform(0.05, 0.5, 3)
+    else:  # room / sky with a mild tint
+        top = _muted(rng, sat=(0.0, 0.3), val=(0.5, 1.0))
+        horizon = _muted(rng, sat=(0.0, 0.2), val=(0.5, 0.95))
+        bottom = _muted(rng, sat=(0.0, 0.3), val=(0.05, 0.5))
     top, horizon, bottom = (np.asarray(c, np.float32) for c in (top, horizon, bottom))
     upper = top + (horizon - top) * np.clip(v / 0.5, 0, 1)[..., None]
     lower = horizon + (bottom - horizon) * np.clip((v - 0.5) / 0.5, 0, 1)[..., None]

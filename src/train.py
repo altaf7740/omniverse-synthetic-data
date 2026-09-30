@@ -1,5 +1,5 @@
 """
-Stage 4: train YOLO26n-seg (instance segmentation) on the dataset built in
+Stage 4: train YOLO26-seg (instance segmentation) on the dataset built in
 stage 3.
 
 Run with a normal Python, from the repo root:
@@ -23,6 +23,11 @@ WEIGHTS_CACHE = Path.home() / ".cache" / "synth-pipeline"
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path, help="Same one passed to earlier stages.")
+    parser.add_argument(
+        "--model",
+        default="yolo26n-seg.pt",
+        help="Pretrained weights: yolo26n-seg.pt (fastest) up to yolo26s/m/l/x-seg.pt (more accurate, slower).",
+    )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", type=int, default=16)
@@ -40,7 +45,7 @@ if __name__ == "__main__":
     args = parse_args()
     WEIGHTS_CACHE.mkdir(parents=True, exist_ok=True)
     os.chdir(WEIGHTS_CACHE)  # safe: every path passed to Ultralytics below is absolute
-    model = YOLO("yolo26n-seg.pt")  # COCO-pretrained nano model, segment task
+    model = YOLO(args.model)  # COCO-pretrained, segment task
 
     model.train(
         data=str(args.output_dir / "yolo_seg_dataset" / "data.yaml"),

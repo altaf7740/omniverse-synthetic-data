@@ -5,11 +5,13 @@ under --output-dir).
 
 Each frame:
   1. randomizes appearance - ground texture/tiling/tint, environment backdrop,
-     lights, part and clutter materials, which parts and clutter are present;
+     lights, part and clutter materials, how many of each part (0-N) and
+     which clutter are present;
   2. drops the parts and clutter onto the ground and lets physics settle
      them, so they rest in natural poses (on their side, flat, leaning on
-     each other) instead of being placed at arbitrary, half-buried angles;
-  3. moves the camera to a random point on an orbit around them and captures.
+     each other, in piles) instead of arbitrary, half-buried angles;
+  3. frames one random part at a random apparent size, lens and viewing
+     angle, and captures.
 Ranges live in pyproject.toml's [tool.synth-pipeline.*] tables.
 
 Clears <output-dir>/synthetic_dataset first - Replicator numbers frames from
@@ -110,14 +112,19 @@ DISTRACTOR_FINISHES = [
     (20, ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)), (0.0, 0.3), (0.2, 1.0)),
     (8, ((0.45, 0.45, 0.45), (0.8, 0.8, 0.8)), (0.8, 1.0), (0.15, 0.6)),
 ]
-DISTRACTOR_SHAPES = (F.create.cube, F.create.sphere, F.create.cylinder, F.create.cone, F.create.torus)
-
-SPAWN_GAP = 1.0  # clearance between spawned bodies, and above the ground
-PARK_X = 1e4  # hidden bodies wait here on the (much larger) ground collider, far out of view
-
+DISTRACTOR_SHAPES = (F.create.cube, F.create.sphere, F.create.cylinder, F.create.cone)
 
 def _world_range(prim):
     return UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render"]).ComputeWorldBound(prim).ComputeAlignedRange()
+
+
+def _meters_per_unit(manifest: dict) -> float:
+    """The parts' length unit. Parts are used at their authored size (no
+    rescaling), so the scene works in that unit - which sets gravity."""
+    units = {name: UsdGeom.GetStageMetersPerUnit(Usd.Stage.Open(path)) for name, path in manifest.items()}
+    if len({round(u, 9) for u in units.values()}) > 1:
+        raise ValueError(f"Parts use different length units (meters per unit): {units}. Re-export them in one unit.")
+    return next(iter(units.values()))
 
 
 class Scene:
@@ -125,24 +132,47 @@ class Scene:
         self.ground_textures, self.env_textures = ground_textures, env_textures
         self.physx = omni.physx.get_physx_interface()
 
-        F.physics.create_physics_scene("/PhysicsScene", gravityMagnitude=config.GRAVITY)
+        # Enough copies of every class for the most crowded frame; each frame
+        # uses a random number of them and parks the rest.
+        copies = config.INSTANCES_PER_CLASS[1]
+        self.parts, self.part_class = [], []
+        for name, path in manifest.items():
+            for _ in range(copies):
+                self.parts.append(self._load_centered_part(len(self.parts), name, path))
+                self.part_class.append(name)
+        self.classes = list(manifest)
+        # Radius of each part around its (centered) pivot: a bound that holds in any orientation.
+        self.part_radii = [_world_range(p).GetSize().GetLength() / 2 for p in self.parts]
+
+        # Scene scale R: every length setting is a multiple of it, so the same
+        # settings fit 5 mm screws and 500 mm brackets, in any CAD unit.
+        self.R = R = float(np.median(self.part_radii))
+        mpu = _meters_per_unit(manifest)
+        print(f"Scene scale: median part radius {R:.3g} units ({R * mpu * 1000:.3g} mm), 1 unit = {mpu:g} m")
+        F.physics.create_physics_scene("/PhysicsScene", gravityMagnitude=9.81 / mpu)
+        self.spawn_gap = 0.12 * R  # clearance between spawned bodies, and above the ground
+        self.park_x = 1000 * R  # absent bodies wait here on the (much larger) ground collider, far out of view
 
         # Visual ground plane (default plane is 1x1). Collisions use a thick,
         # invisible slab instead: a zero-thickness plane lets thin, fast parts
         # tunnel straight through it. The slab is far larger than the visible
-        # ground so hidden bodies can be parked on it out of view.
-        self.ground = F.create.plane(scale=config.GROUND_SIZE, name="Ground")
-        slab_size = 4 * PARK_X
-        slab = F.create.cube(position=(0, 0, -25), scale=(slab_size, slab_size, 50), name="GroundCollider")
+        # ground so absent bodies can be parked on it out of view.
+        self.ground = F.create.plane(scale=config.GROUND_SIZE * R, name="Ground")
+        slab_size = 4 * self.park_x
+        slab = F.create.cube(position=(0, 0, -3 * R), scale=(slab_size, slab_size, 6 * R), name="GroundCollider")
         F.modify.visibility(slab, False)
         F.physics.apply_collider(slab)
         self.ground_material = F.create.material(mdl="OmniPBR.mdl", bind_prims=[self.ground], name="GroundMaterial")
 
         self.dome = F.create.dome_light(texture=env_textures[0], intensity=1000.0, name="Environment")
+        # Light radius scales with the scene, so the same intensity gives the same exposure at any size.
         self.point_light = F.create.sphere_light(name="PointLight")
-        self.camera = F.create.camera(position=(0, -150, 100), look_at=(0, 0, 0), name="Camera")
+        F.modify.attribute(self.point_light, "inputs:radius", float(config.POINT_LIGHT_RADIUS * R))
+        self.sun = F.create.distant_light(name="Sun")
+        self.camera = F.create.camera(
+            position=(0, -20 * R, 12 * R), look_at=(0, 0, 0), clipping_range=(0.01 * R, 1e4 * R), name="Camera"
+        )
 
-        self.parts = [self._load_centered_part(i, name, path) for i, (name, path) in enumerate(manifest.items())]
         self.distractors = [
             shape(name=f"Distractor_{shape.__name__}_{i}")
             for shape in DISTRACTOR_SHAPES
@@ -152,10 +182,8 @@ class Scene:
         # that starts slightly overlapping another clean through the floor.
         for body in self.parts + self.distractors:
             F.physics.apply_rigid_body(
-                body, with_collider=True, angularDamping=2.0, linearDamping=0.5, maxDepenetrationVelocity=200.0
+                body, with_collider=True, angularDamping=2.0, linearDamping=0.5, maxDepenetrationVelocity=25.0 * R
             )
-        # Radius of each part around its (centered) pivot: a bound that holds in any orientation.
-        self.part_radii = [_world_range(p).GetSize().GetLength() / 2 for p in self.parts]
 
         self.part_materials = self._material_pool(PART_FINISHES, rng, "PartMaterial")
         self.distractor_materials = self._material_pool(DISTRACTOR_FINISHES, rng, "DistractorMaterial")
@@ -205,13 +233,15 @@ class Scene:
 
     def randomize_appearance(self, rng) -> tuple:
         """Everything except body placement. Returns (visible parts, visible distractors)."""
-        tile = rng.uniform(*config.GROUND_TEXTURE_TILE)
+        repeats = config.GROUND_SIZE / rng.uniform(*config.GROUND_TEXTURE_TILE)  # both in units of R
         mat = self.ground_material
         # Plain string: Replicator's material-attribute helper builds the AssetPath itself.
         F.modify.attribute(mat, "diffuse_texture", str(rng.choice(self.ground_textures)), Sdf.ValueTypeNames.Asset)
-        F.modify.attribute(mat, "texture_scale", Gf.Vec2f(config.GROUND_SIZE / tile, config.GROUND_SIZE / tile), Sdf.ValueTypeNames.Float2)
+        F.modify.attribute(mat, "texture_scale", Gf.Vec2f(repeats, repeats), Sdf.ValueTypeNames.Float2)
         F.modify.attribute(mat, "texture_rotate", float(rng.uniform(0, 360)), Sdf.ValueTypeNames.Float)
-        F.modify.attribute(mat, "diffuse_tint", Gf.Vec3f(*rng.uniform(0.75, 1.0, 3)), Sdf.ValueTypeNames.Color3f)
+        # Brightness plus a slight warm/cool cast - not a per-channel tint, which turns grey surfaces pink or green.
+        tint = rng.uniform(0.7, 1.0) * (1.0 + rng.uniform(-0.05, 0.05, 3))
+        F.modify.attribute(mat, "diffuse_tint", Gf.Vec3f(*tint), Sdf.ValueTypeNames.Color3f)
         F.modify.attribute(mat, "reflection_roughness_constant", float(rng.uniform(0.3, 1.0)), Sdf.ValueTypeNames.Float)
 
         F.modify.attribute(self.dome, "inputs:texture:file", Sdf.AssetPath(str(rng.choice(self.env_textures))))
@@ -219,9 +249,14 @@ class Scene:
         F.modify.pose(self.dome, rotation_value=(0.0, 0.0, float(rng.uniform(0, 360))))
 
         lo, hi = config.POINT_LIGHT_POSITION_RANGE
-        F.modify.pose(self.point_light, position_value=tuple(float(v) for v in rng.uniform(lo, hi)))
+        F.modify.pose(self.point_light, position_value=tuple(float(v) * self.R for v in rng.uniform(lo, hi)))
         F.modify.attribute(self.point_light, "inputs:intensity", float(rng.uniform(*config.POINT_LIGHT_INTENSITY_RANGE)))
         F.modify.attribute(self.point_light, "inputs:color", Gf.Vec3f(*rng.uniform((0.8, 0.75, 0.65), (1.0, 1.0, 1.0))))
+
+        sun_on = rng.random() < config.DISTANT_LIGHT_PROBABILITY
+        F.modify.attribute(self.sun, "inputs:intensity", float(rng.uniform(*config.DISTANT_LIGHT_INTENSITY_RANGE)) if sun_on else 0.0)
+        tilt = 90.0 - rng.uniform(*config.DISTANT_LIGHT_ELEVATION_DEG)  # the light shines along its -Z
+        F.modify.pose(self.sun, rotation_value=(float(tilt), 0.0, float(rng.uniform(0, 360))))
 
         strength = UsdShade.Tokens.strongerThanDescendants  # beat the materials baked into the CAD files
         for bodies, pool in ((self.parts, self.part_materials), (self.distractors, self.distractor_materials)):
@@ -232,7 +267,13 @@ class Scene:
         # hidden: toggling visibility made the renderer drop a part's class
         # label for a few frames after it was shown again, so it came out
         # unlabelled in the masks.
-        part_on = rng.random(len(self.parts)) < config.PART_VISIBLE_PROBABILITY
+        counts = {name: int(rng.integers(config.INSTANCES_PER_CLASS[0], config.INSTANCES_PER_CLASS[1] + 1)) for name in self.classes}
+        if rng.random() < config.EMPTY_FRAME_PROBABILITY:
+            counts = dict.fromkeys(counts, 0)
+        part_on = np.zeros(len(self.parts), bool)
+        for i, name in enumerate(self.part_class):
+            if counts[name] > 0:
+                part_on[i], counts[name] = True, counts[name] - 1
         dist_on = rng.random(len(self.distractors)) < config.DISTRACTOR_VISIBLE_PROBABILITY
         return part_on, dist_on
 
@@ -241,7 +282,7 @@ class Scene:
 
         Returns how many visible parts fell through the ground (should be 0).
         """
-        sizes = rng.uniform(*config.DISTRACTOR_SIZE, len(self.distractors))
+        sizes = rng.uniform(*config.DISTRACTOR_SIZE, len(self.distractors)) * self.R
         F.modify.pose(self.distractors, scale_value=[(float(s),) * 3 for s in sizes], write_to_usd=True)
         # A unit primitive fits in a sphere of radius sqrt(3)/2 around its center.
         dist_radii = list(sizes * 0.87)
@@ -250,21 +291,25 @@ class Scene:
         bodies = self.parts + self.distractors
         radii = self.part_radii + dist_radii
         visible = list(part_on) + list(dist_on)
-        spreads = [config.PART_SPREAD] * len(self.parts) + [config.DISTRACTOR_SPREAD] * len(self.distractors)
+        # Spread grows with the number of parts dropped, so crowding (and how
+        # often parts pile up) doesn't depend on how many classes there are.
+        part_spread = rng.uniform(*config.PART_SPREAD) * self.R * np.sqrt(max(int(np.sum(part_on)), 1))
+        spreads = [part_spread] * len(self.parts) + [config.DISTRACTOR_SPREAD * self.R] * len(self.distractors)
+        gap = self.spawn_gap
 
         positions, placed, stack = [], [], 0.0
         for i, (r, on, spread) in enumerate(zip(radii, visible, spreads)):
             if not on:
-                positions.append((PARK_X + 100.0 * i, 0.0, r + SPAWN_GAP))
+                positions.append((self.park_x + 20 * self.R * i, 0.0, r + gap))
                 continue
             for _ in range(100):  # non-overlapping spot; bodies that start interpenetrating get launched
                 xy = rng.uniform(-spread, spread, 2)
-                if all(np.hypot(*(xy - q)) > r + rq + SPAWN_GAP for q, rq in placed):
-                    z = r + SPAWN_GAP + rng.uniform(0, r)
+                if all(np.hypot(*(xy - q)) > r + rq + gap for q, rq in placed):
+                    z = r + gap + rng.uniform(0, r)
                     break
             else:  # too crowded: drop it from above the others instead
-                stack += 2 * r + SPAWN_GAP
-                z = r + SPAWN_GAP + stack
+                stack += 2 * r + gap
+                z = r + gap + stack
             placed.append((xy, r))
             positions.append((float(xy[0]), float(xy[1]), float(z)))
         rotations = [tuple(float(a) for a in rng.uniform(0, 360, 3)) for _ in bodies]
@@ -285,15 +330,36 @@ class Scene:
         for to_usd in (True, False):  # USD, then Fabric (what the renderer reads)
             F.modify.pose(bodies, position_value=final_pos, rotation_value=final_rot, write_to_usd=to_usd)
 
+        # What the camera can frame: visible parts, else visible clutter, with their bounding radii.
+        on_parts = [(p, r) for p, r, on in zip(final_pos, self.part_radii, part_on) if on]
+        on_clutter = [(p, r) for p, r, on in zip(final_pos[len(self.parts) :], dist_radii, dist_on) if on]
+        self.framing_candidates = on_parts or on_clutter or [((0.0, 0.0, 0.0), self.R)]
         return sum(1 for p, r, on in zip(final_pos, self.part_radii, part_on) if on and p[2] < -r)
 
     def place_camera(self, rng) -> None:
-        dist = rng.uniform(*config.CAMERA_DISTANCE)
+        """Frame one random visible part at a random apparent size.
+
+        Picking the distance from a target size in pixels, instead of a fixed
+        distance range, keeps small parts (a 5 mm nut) from being only a few
+        pixels in most frames while large parts fill the view.
+        """
+        focal = float(rng.uniform(*config.CAMERA_FOCAL_LENGTH))
+        aperture = self.camera.GetAttribute("horizontalAperture").Get()
+        focal_px = config.RESOLUTION[0] * focal / aperture
+        center, radius = self.framing_candidates[rng.integers(len(self.framing_candidates))]
+        size_px = rng.uniform(*config.CAMERA_TARGET_PIXELS)
+        dist = max(focal_px * 2 * radius / size_px, 3 * radius)
+
+        # Shift the aim point so the framed part lands off-center, but stays in frame.
+        half_view = dist * aperture / (2 * focal)
+        shift = rng.uniform(-1, 1, 2) * config.CAMERA_FRAME_OFFSET * half_view
+        target = np.array(center) + np.array([shift[0], shift[1], 0.0])
+
         elev = np.radians(rng.uniform(*config.CAMERA_ELEVATION_DEG))
         azim = rng.uniform(0.0, 2 * np.pi)
-        j = config.CAMERA_LOOK_AT_JITTER
-        target = np.array([rng.uniform(-j, j), rng.uniform(-j, j), 0.0])
         offset = np.array([np.cos(elev) * np.cos(azim), np.cos(elev) * np.sin(azim), np.sin(elev)])
+        F.modify.attribute(self.camera, "focalLength", focal)
+        F.modify.attribute(self.camera, "focusDistance", float(dist))
         F.modify.pose(
             self.camera,
             position_value=tuple(float(v) for v in target + offset * dist),

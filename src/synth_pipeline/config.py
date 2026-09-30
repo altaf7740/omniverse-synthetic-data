@@ -32,19 +32,20 @@ RESOLUTION = tuple(_raw["rendering"]["resolution"])
 SEED = _raw["rendering"]["seed"]
 RT_SUBFRAMES = _raw["rendering"]["rt_subframes"]
 
-GRAVITY = _raw["physics"]["gravity"]
 SETTLE_SECONDS = _raw["physics"]["settle_seconds"]
 PHYSICS_STEPS_PER_SECOND = _raw["physics"]["steps_per_second"]
 
 VAL_SPLIT = _raw["dataset"]["val_split"]
 
 _r = _raw["randomization"]
-CAMERA_DISTANCE = _range("camera_distance")
-CAMERA_ELEVATION_DEG = _range("camera_elevation_deg")
-CAMERA_LOOK_AT_JITTER = _r["camera_look_at_jitter"]
+INSTANCES_PER_CLASS = _range("instances_per_class")
+PART_SPREAD = _range("part_spread")
+EMPTY_FRAME_PROBABILITY = _r["empty_frame_probability"]
 
-PART_SPREAD = _r["part_spread"]
-PART_VISIBLE_PROBABILITY = _r["part_visible_probability"]
+CAMERA_TARGET_PIXELS = _range("camera_target_pixels")
+CAMERA_FOCAL_LENGTH = _range("camera_focal_length")
+CAMERA_ELEVATION_DEG = _range("camera_elevation_deg")
+CAMERA_FRAME_OFFSET = _r["camera_frame_offset"]
 
 DISTRACTORS_PER_SHAPE = _r["distractors_per_shape"]
 DISTRACTOR_SIZE = _range("distractor_size")
@@ -57,3 +58,7 @@ GROUND_TEXTURE_TILE = _range("ground_texture_tile")
 DOME_LIGHT_INTENSITY_RANGE = _range("dome_light_intensity")
 POINT_LIGHT_POSITION_RANGE = _range("point_light_position")
 POINT_LIGHT_INTENSITY_RANGE = _range("point_light_intensity")
+POINT_LIGHT_RADIUS = _r["point_light_radius"]
+DISTANT_LIGHT_PROBABILITY = _r["distant_light_probability"]
+DISTANT_LIGHT_INTENSITY_RANGE = _range("distant_light_intensity")
+DISTANT_LIGHT_ELEVATION_DEG = _range("distant_light_elevation_deg")

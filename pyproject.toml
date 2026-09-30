@@ -49,43 +49,60 @@ rt_subframes = 4  # render passes per captured frame, so swapped textures/materi
 # Parts and clutter are dropped onto the surface and settle under physics each
 # frame, so they rest in natural poses instead of being placed at arbitrary
 # (often half-buried) orientations.
+# Gravity is not set here: it follows from the parts' length unit (read from
+# the converted files), so mm, inch or meter CAD all fall correctly.
 [tool.synth-pipeline.physics]
-gravity = 9810.0  # stage units / s^2; 9810 = 9.81 m/s^2 in mm, the example parts' CAD units
 settle_seconds = 1.0
 steps_per_second = 240
 
 [tool.synth-pipeline.dataset]
 val_split = 0.15
 
-# Ranges are [min, max]. Lengths are in the parts' own CAD units (mm for the
-# example fasteners).
+# Ranges are [min, max].
+#
+# Lengths are in multiples of R, the median bounding radius of your parts
+# (printed at the start of stage 2; ~8.5 mm for the example fasteners). So
+# these settings work unchanged for any part set - 3 mm electronics
+# components or 500 mm brackets - in any CAD unit.
 [tool.synth-pipeline.randomization]
-# Camera orbits the parts. Distance is tuned for small parts (~5-40 mm): close
-# enough to show detail, far enough that parts don't fill the frame. Elevation
-# is the angle above the ground: low angles see past the ground to the
-# backdrop; it stays below 90 because looking straight down makes the
-# camera's look-at orientation degenerate.
-camera_distance = [50, 200]
-camera_elevation_deg = [15, 85]
-camera_look_at_jitter = 20  # off-center framing, so parts aren't always mid-frame
+# Scene: each class appears 0-N times per frame (several screws of one kind
+# touching or overlapping, as in a real bin). Parts are dropped within
+# +/- spread of the center, in units of R x sqrt(number of parts dropped) so
+# crowding doesn't depend on how many classes you have. It is drawn per
+# frame: small values make piles with occlusion, large ones scattered layouts.
+instances_per_class = [0, 3]
+part_spread = [0.4, 1.9]
+empty_frame_probability = 0.03  # frames with no parts at all: teach the model to predict nothing
 
-part_spread = 30  # parts are dropped within +/- this distance of the center (x and y)
-part_visible_probability = 0.85  # each part independently; gives single- and multi-part frames
+# Camera: it frames one randomly picked part at a random apparent size, so
+# every class - including tiny ones - is seen from wide shots to close-ups.
+# The distance follows from that size and the lens. Elevation is the angle
+# above the ground: low angles see past the ground to the backdrop; it stays
+# below 90 because looking straight down makes the camera's look-at
+# orientation degenerate.
+camera_target_pixels = [50, 400]  # apparent size of the framed part's bounding sphere, px
+camera_focal_length = [18, 60]  # mm (35 mm-style aperture): wide angle to short telephoto
+camera_elevation_deg = [20, 88]
+camera_frame_offset = 0.6  # framed part sits up to this fraction of the half-frame off-center
 
-# Unlabelled clutter (cubes, spheres, cylinders, cones, tori) so the model
-# learns to ignore things that aren't parts.
-# Kept at or below part size and sparse - clutter should challenge the model,
-# not bury the parts.
+# Unlabelled clutter (cubes, spheres, cylinders, cones) so the model learns to
+# ignore things that aren't parts. No tori: a torus the size of a nut looks
+# like one at a distance, and teaches the model to doubt real nuts.
 distractors_per_shape = 2
-distractor_size = [3, 20]
-distractor_spread = 80
+distractor_size = [0.35, 2.4]  # R
+distractor_spread = 7  # R
 distractor_visible_probability = 0.4
 
-ground_size = 1000
+ground_size = 120  # R
 # Size of one texture repeat on the ground. Kept small so close-ups still
 # show crisp texture detail instead of a few magnified texels.
-ground_texture_tile = [20, 100]
+ground_texture_tile = [2.4, 12]  # R
 
 dome_light_intensity = [300, 2000]
-point_light_position = [[-150, -150, 50], [150, 150, 300]]
+point_light_position = [[-18, -18, 6], [18, 18, 35]]  # R
+point_light_radius = 0.06  # R; scales with the scene, so intensity gives the same exposure at any size
 point_light_intensity = [50000, 500000]
+# Sun / strong overhead lamp: crisp shadows in some frames, off in others.
+distant_light_probability = 0.5
+distant_light_intensity = [500, 3000]
+distant_light_elevation_deg = [25, 85]

@@ -29,16 +29,34 @@ a YOLO26-seg model.
 | | |
 |---|---|
 | **Placement** | Parts and clutter are dropped onto the surface and settled with physics, so they rest in natural poses (on their side, flat, leaning on each other) |
-| **Surface** | 36 built-in procedural textures (wood, brushed metal, concrete, fabric, tiles, cardboard, speckle, rubber mat, plain), random tiling, rotation and tint, plus your own photos via `--textures-dir` |
-| **Backdrop** | Textured environment (studio gradients, tinted rooms and skies), rotated per frame; visible in low-angle shots, and reflected by metal parts |
+| **Composition** | 0–3 copies of each part per frame, dropped close together (piles, overlaps) or far apart (scattered); 3% of frames have no parts at all |
+| **Surface** | 48 built-in procedural textures, mostly realistic (wood, brushed metal, concrete, fabric, tiles, cardboard, speckled laminate, rubber mat, anti-static mat, paper, plain) plus a small share of loud colors; random tiling, rotation and brightness; plus your own photos via `--textures-dir` |
+| **Backdrop** | Textured environment (studio gradients, mildly tinted rooms and skies), rotated per frame; visible in low-angle shots, and reflected by metal parts |
 | **Part finishes** | Steel/zinc, black oxide, brass/yellow zinc, white and black nylon, plus a share of random colors |
-| **Clutter** | Unlabelled cubes, spheres, cylinders, cones and tori with random finishes, including metallic greys |
-| **Composition** | Each part is independently present or absent, so frames range from single parts to all of them |
-| **Camera** | Orbit around the parts: distance, elevation (15–85°), azimuth and off-center aim |
-| **Lights** | Environment intensity; point light position, intensity and warm/neutral tint |
+| **Clutter** | Unlabelled cubes, spheres, cylinders and cones with random finishes, including metallic greys |
+| **Camera** | Frames one random part at a random apparent size (50–400 px), so small parts are seen up close as often as large ones; random lens (18–60 mm), elevation (20–88°), azimuth and off-center aim |
+| **Lights** | Environment intensity; point light position, intensity and warm/neutral tint; a sun-like light with crisp shadows in half the frames |
+| **Camera effects** | Stage 3 adds blur, motion blur, sensor noise and JPEG compression to a share of the training images (validation images stay clean) |
 
 Every range is in `pyproject.toml`'s `[tool.synth-pipeline.*]` tables, and a
 fixed `seed` makes runs reproducible.
+
+### Works for any part set without retuning
+
+Nothing is tuned to the example fasteners. Stage 2 measures your parts and
+scales the scene to them:
+
+- **Size:** every length setting (spacing, clutter size, ground, texture
+  scale, light placement) is a multiple of the parts' median bounding
+  radius, so 3 mm components and 500 mm brackets get the same kind of
+  scene. The camera frames each part by its own size.
+- **Units:** gravity comes from the unit the parts were converted in, so mm,
+  inch and meter CAD all fall and settle correctly.
+- **Class count:** spacing grows with the number of parts dropped, so 2
+  classes or 20 give similar crowding. Classes come from the input folders.
+
+Stage 2 prints the scale it measured, e.g.
+`Scene scale: median part radius 8.5 units (8.5 mm), 1 unit = 0.001 m`.
 
 Parts are loaded with their pivot moved to their geometric center. CAD
 exports often put geometry far from the file's origin (the example nut is
@@ -172,8 +190,7 @@ examples/fasteners --output-dir workspace` runs end to end against it.
 
 ### Smoke-testing a new part set
 
-Before committing to a full 2000-frame render (about 40 minutes at ~1.2 s a
-frame), check a new input folder with a handful of frames and look at them:
+Before committing to a full 2000-frame render (about 30 minutes), check a new input folder with a handful of frames and look at them:
 
 ```
 make convert INPUT_DIR=my_parts
@@ -182,8 +199,17 @@ make dataset preview
 uv run python src/train.py --output-dir workspace --epochs 1 --batch 2
 ```
 
-`train.py` also takes `--imgsz` and `--name` (the run folder under
-`runs/`, default `seg`).
+`train.py` also takes `--imgsz`, `--name` (the run folder under `runs/`,
+default `seg`) and `--model` (default `yolo26n-seg.pt`; `yolo26s-seg.pt` or
+larger is more accurate, especially on small parts, but slower).
+
+Stage 3 ends with a per-class health check: how many instances, their
+median size in pixels, and the share smaller than 20×20 px. A class that is
+rare or mostly tiny will train poorly; fix it in the settings before
+spending time on training.
+
+Each instance's label is one polygon: pieces split by occlusion are joined,
+and holes (a nut's bore) stay open.
 
 ### Makefile
 
@@ -283,15 +309,17 @@ modules with those names.
   synthetic data from the same distribution. Collect real photos of your
   parts and run `model.predict()` against them before trusting deployment
   accuracy; widen `pyproject.toml`'s randomization ranges if it's weak.
-- **Ranges are tuned for small parts (~5-40 mm).** Camera distance, clutter
-  size, spawn spread and gravity (`[tool.synth-pipeline.physics]`, in stage
-  units per s²) all assume parts of that size in mm. For a very different
-  part set, adjust them in `pyproject.toml` and check with `make preview`.
+- **Part finishes assume mechanical parts** (metals, black oxide, plastics).
+  For other kinds of objects, edit `PART_FINISHES` in `generate_dataset.py`.
+- **Very mixed sizes in one set** (say 3 mm and 500 mm parts together) work,
+  but clutter and spacing follow the median part, so the extremes look less
+  natural. Check with `make preview`.
+- **More classes render slower**: each class adds up to 3 physics bodies.
 - **Procedural textures are a stand-in for real ones.** They vary the
   surface a lot but don't look like real materials up close; photos passed
   via `--textures-dir` are the better source when you have them.
-- **Rendering is ~1.2 s per frame** (mostly physics settling), so a
-  2000-frame dataset takes about 40 minutes.
+- **Rendering is ~0.9 s per frame** (mostly physics settling), so a
+  2000-frame dataset takes about 30 minutes.
 - **Stage 2's console shows errors only**, plus a progress bar with ETA.
   Warnings (e.g. Replicator's harmless per-frame `Illegal cycle connection
   ... WriterSyncGate`) still go to Kit's log file, whose path is printed at
