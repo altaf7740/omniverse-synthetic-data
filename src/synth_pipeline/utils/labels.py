@@ -1,6 +1,6 @@
 """
-Convert Replicator BasicWriter's instance_segmentation output into YOLO-seg
-polygon labels.
+Convert Replicator BasicWriter's instance_segmentation output into YOLO
+labels: outline polygons (segmentation) or bounding boxes (detection).
 
 Per frame, BasicWriter writes (verified against real output):
   instance_segmentation_NNNN.png
@@ -10,7 +10,7 @@ Per frame, BasicWriter writes (verified against real output):
       to its semantic class, plus "BACKGROUND"/"UNLABELLED" entries for
       pixels that aren't a labelled part (e.g. the ground plane).
 Every instance has its own color even when two share a class, so each
-still becomes its own polygon.
+still becomes its own polygon or box.
 
 Runs in the uv venv (stage 3), not Isaac Sim's Python.
 """
@@ -106,4 +106,31 @@ def frame_to_yolo_seg_lines(
         norm[:, 1] /= img_h
         coords = " ".join(f"{v:.6f}" for v in norm.flatten())
         lines.append(f"{class_to_idx[class_name]} {coords}")
+    return lines
+
+
+def frame_to_yolo_box_lines(
+    mask_rgba: np.ndarray,
+    instance_class_map: dict,
+    class_to_idx: dict,
+    img_w: int,
+    img_h: int,
+    min_area: int = 4,
+) -> list:
+    """Build YOLO detection label lines ("class cx cy w h", normalized) for one frame.
+
+    Boxes are tight around each instance's visible pixels, so a partly hidden
+    part gets a box around what the camera sees - the same region its
+    segmentation outline covers. Arguments as in frame_to_yolo_seg_lines().
+    """
+    lines = []
+    for color, class_name in instance_class_map.items():
+        if class_name not in class_to_idx:
+            continue
+        ys, xs = np.nonzero(np.all(mask_rgba == np.array(color, dtype=mask_rgba.dtype), axis=-1))
+        if len(xs) < min_area:  # fully hidden, or a few stray pixels
+            continue
+        x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+        box = ((x0 + x1) / 2 / img_w, (y0 + y1) / 2 / img_h, (x1 - x0) / img_w, (y1 - y0) / img_h)
+        lines.append(f"{class_to_idx[class_name]} " + " ".join(f"{v:.6f}" for v in box))
     return lines

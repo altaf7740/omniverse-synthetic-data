@@ -25,6 +25,7 @@ Run with Isaac Sim's bundled Python, from the repo root:
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import traceback
@@ -198,7 +199,9 @@ class Scene:
         the ground. So: root (posed, carries the class label) -> pivot
         (offset by -center) -> the referenced file, left untouched.
         """
-        root = F.create.xform(semantics={"class": class_name}, name=f"Part_{index}_{class_name}")
+        # The label keeps the class name as-is; the prim name can't hold "-" or spaces.
+        prim_name = re.sub(r"[^A-Za-z0-9_]", "_", class_name)
+        root = F.create.xform(semantics={"class": class_name}, name=f"Part_{index}_{prim_name}")
         pivot = F.create.xform(parent=root, name="Pivot")
         geometry = F.create.reference(usd_path, parent=pivot, name="Geometry")
         # The CAD converter instances repeated sub-shapes. Rendered from shared

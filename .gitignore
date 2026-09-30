@@ -1,5 +1,6 @@
 # Generated pipeline output - never commit large binaries/datasets
 workspace/
+jobs/
 **/*.usd
 
 # Pretrained weights Ultralytics downloads into the working directory

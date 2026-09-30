@@ -10,6 +10,9 @@ dependencies = [
     "ultralytics",
     "torch",
     "torchvision",
+    "fastapi>=0.142.2",
+    "uvicorn>=0.54.0",
+    "python-multipart>=0.0.32",
 ]
 
 # This repo is a set of top-level scripts + a utils/ package imported via

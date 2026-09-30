@@ -1,5 +1,5 @@
-# Synthetic-data pipeline: CAD parts (STEP) -> instance-segmentation
-# training data -> trained YOLO26-seg model.
+# Synthetic-data pipeline: CAD parts (STEP) -> segmentation or detection
+# training data -> trained YOLO26 model.
 #
 # Every pipeline target goes through src/main.py, which reads the Isaac Sim
 # path from pyproject.toml and dispatches each stage to the right Python
@@ -12,21 +12,24 @@
 # Override variables on the command line, e.g.:
 #   make all INPUT_DIR=my_parts OUTPUT_DIR=out
 #   make generate NUM_FRAMES=20 TEXTURES_DIR=my_photos
+#   make dataset TASK=detect
 
 INPUT_DIR ?= examples/fasteners
 OUTPUT_DIR ?= workspace
 NUM_FRAMES ?=
 TEXTURES_DIR ?=
+TASK ?= segment
 PER_CLASS ?= 5
+PORT ?= 8000
 
-RUN := uv run python src/main.py --input-dir $(INPUT_DIR) --output-dir $(OUTPUT_DIR) \
+RUN := uv run python src/main.py --input-dir $(INPUT_DIR) --output-dir $(OUTPUT_DIR) --task $(TASK) \
 	$(if $(NUM_FRAMES),--num-frames $(NUM_FRAMES)) $(if $(TEXTURES_DIR),--textures-dir $(TEXTURES_DIR))
 
-.PHONY: help setup convert generate dataset train all preview clean
+.PHONY: help setup convert generate dataset train all preview ui clean
 
 help:
-	@echo Targets: setup convert generate dataset train all preview clean
-	@echo Vars: INPUT_DIR=$(INPUT_DIR) OUTPUT_DIR=$(OUTPUT_DIR) NUM_FRAMES=$(NUM_FRAMES) TEXTURES_DIR=$(TEXTURES_DIR) PER_CLASS=$(PER_CLASS)
+	@echo Targets: setup convert generate dataset train all preview ui clean
+	@echo Vars: INPUT_DIR=$(INPUT_DIR) OUTPUT_DIR=$(OUTPUT_DIR) NUM_FRAMES=$(NUM_FRAMES) TEXTURES_DIR=$(TEXTURES_DIR) TASK=$(TASK) PER_CLASS=$(PER_CLASS) PORT=$(PORT)
 
 setup:
 	uv sync
@@ -48,6 +51,9 @@ all:
 
 preview:
 	uv run python src/preview_dataset.py --output-dir $(OUTPUT_DIR) --per-class $(PER_CLASS)
+
+ui:
+	uv run python src/server.py --port $(PORT)
 
 clean:
 	uv run python -c "import shutil; shutil.rmtree(r'$(OUTPUT_DIR)', ignore_errors=True)"

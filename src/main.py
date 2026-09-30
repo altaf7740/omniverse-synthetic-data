@@ -1,7 +1,7 @@
 """
 Pipeline entry point. Point it at a folder of CAD parts and it runs the
 whole thing: STEP -> USD -> synthetic renders (with instance-segmentation
-masks) -> YOLO-seg dataset -> trained model.
+masks) -> YOLO dataset (outlines or boxes) -> trained model.
 
 Input folder contract: one subfolder per class, each containing either a
 .step/.stp file directly, or a single .zip that contains one
@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 from synth_pipeline import config
+from synth_pipeline.utils.yolo_dataset import TASKS
 
 HERE = Path(__file__).resolve().parent
 
@@ -51,14 +52,21 @@ def stage_args(name: str, args) -> list:
         if args.textures_dir is not None:
             extra += ["--textures-dir", str(args.textures_dir)]
         return extra
+    if name == "dataset":
+        return ["--task", args.task]
     return []
 
 
 def run_stage(name: str, script: Path, interpreter: str, args) -> None:
+    if interpreter == "isaac" and not config.ISAAC_PYTHON.exists():
+        raise SystemExit(
+            f"Isaac Sim not found: {config.ISAAC_PYTHON} doesn't exist. "
+            "Set [tool.synth-pipeline.isaac].root in pyproject.toml to your Isaac Sim folder."
+        )
     py = str(config.ISAAC_PYTHON) if interpreter == "isaac" else sys.executable
     cmd = [py, str(script), "--output-dir", str(args.output_dir)] + stage_args(name, args)
 
-    print(f"\n=== stage '{name}': {' '.join(cmd)} ===\n")
+    print(f"\n=== stage '{name}': {' '.join(cmd)} ===\n", flush=True)
     # No cwd= override here - input_dir/output_dir are already resolved to
     # absolute paths in main() below, so it doesn't matter what directory
     # each stage subprocess actually runs in.
@@ -75,6 +83,9 @@ def main():
     parser.add_argument("--from", dest="from_stage", choices=STAGE_NAMES, help="Run this stage and all after it.")
     parser.add_argument("--num-frames", type=int, help="Frames to render (default: pyproject.toml's num_frames).")
     parser.add_argument("--textures-dir", type=Path, help="Folder of photos to mix into ground/backdrop textures.")
+    parser.add_argument(
+        "--task", choices=TASKS, default="segment", help="Label type: segment (outlines, default) or detect (boxes)."
+    )
     args = parser.parse_args()
 
     # Resolve to absolute paths immediately - user-typed relative paths are
