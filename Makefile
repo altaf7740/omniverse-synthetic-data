@@ -1,5 +1,5 @@
-# Synthetic-data pipeline: CAD parts (STEP) -> segmentation or detection
-# training data -> trained YOLO26 model.
+# Synthetic-data pipeline: CAD parts (STEP) -> segmentation, detection or
+# classification training data -> trained YOLO26 model.
 #
 # Every pipeline target goes through src/main.py, which reads the Isaac Sim
 # path from pyproject.toml and dispatches each stage to the right Python

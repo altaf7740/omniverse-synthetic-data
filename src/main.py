@@ -84,7 +84,7 @@ def main():
     parser.add_argument("--num-frames", type=int, help="Frames to render (default: pyproject.toml's num_frames).")
     parser.add_argument("--textures-dir", type=Path, help="Folder of photos to mix into ground/backdrop textures.")
     parser.add_argument(
-        "--task", choices=TASKS, default="segment", help="Label type: segment (outlines, default) or detect (boxes)."
+        "--task", choices=TASKS, default="segment", help="Label type: segment (outlines, default), detect (boxes) or classify (part crops)."
     )
     args = parser.parse_args()
 

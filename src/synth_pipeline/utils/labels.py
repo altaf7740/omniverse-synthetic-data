@@ -1,6 +1,7 @@
 """
 Convert Replicator BasicWriter's instance_segmentation output into YOLO
-labels: outline polygons (segmentation) or bounding boxes (detection).
+labels: outline polygons (segmentation), bounding boxes (detection), or
+per-part image crops (classification).
 
 Per frame, BasicWriter writes (verified against real output):
   instance_segmentation_NNNN.png
@@ -134,3 +135,47 @@ def frame_to_yolo_box_lines(
         box = ((x0 + x1) / 2 / img_w, (y0 + y1) / 2 / img_h, (x1 - x0) / img_w, (y1 - y0) / img_h)
         lines.append(f"{class_to_idx[class_name]} " + " ".join(f"{v:.6f}" for v in box))
     return lines
+
+
+def instance_crops(
+    image: np.ndarray,
+    mask_rgba: np.ndarray,
+    instance_class_map: dict,
+    min_side: int = 32,
+    margin: float = 0.3,
+    min_purity: float = 0.6,
+) -> list:
+    """Cut a square crop around each visible part, for classification.
+
+    Each crop is centered on the part's visible pixels, with `margin` extra
+    around them for context, and shifted to stay inside the image. Crops are
+    skipped when the part is smaller than `min_side` px, or when other parts
+    make up so much of the crop that the part is no longer what it shows
+    (under `min_purity` of the part pixels in it are this part's).
+
+    Returns:
+        [(class name, (S, S, 3) crop of image), ...]
+    """
+    # Instance colors -> IDs 1..N (0 = not a labelled part), so the crop test
+    # can compare whole windows at once.
+    instance_ids = np.zeros(mask_rgba.shape[:2], np.int32)
+    for k, color in enumerate(instance_class_map, start=1):
+        instance_ids[np.all(mask_rgba == np.array(color, dtype=mask_rgba.dtype), axis=-1)] = k
+
+    img_h, img_w = instance_ids.shape
+    crops = []
+    for instance_id, class_name in enumerate(instance_class_map.values(), start=1):
+        ys, xs = np.nonzero(instance_ids == instance_id)
+        if len(xs) == 0:
+            continue
+        x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+        if max(x1 - x0, y1 - y0) < min_side:
+            continue
+        side = min(int(max(x1 - x0, y1 - y0) * (1 + margin)), img_w, img_h)
+        left = int(np.clip(round((x0 + x1 - side) / 2), 0, img_w - side))
+        top = int(np.clip(round((y0 + y1 - side) / 2), 0, img_h - side))
+        window = instance_ids[top : top + side, left : left + side]
+        if (window == instance_id).sum() < min_purity * (window > 0).sum():
+            continue
+        crops.append((class_name, image[top : top + side, left : left + side]))
+    return crops
